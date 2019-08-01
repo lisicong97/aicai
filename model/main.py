@@ -144,6 +144,54 @@ def Transformer(train,test,val,output_categories,num_words,maxlen,embedding_dim,
     test_loss,test_acc = model.evaluate(test_data,test_label)
     return model,train_acc,val_acc,test_acc
 
+def highway(train,test,val,output_categories,num_words,maxlen,embedding_dim,callbacks,
+                multiheads=8,head_dim=16,dense_units=256,dropout_rate=0.2,
+                batch_size=32,epochs=100,verbose=1):
+
+    #一、数据准备
+    train_data,train_label = train
+    test_data,test_label = test
+    val_data,val_label = val
+    #一、网络构建
+    inputs = Input(shape=(maxlen,))
+    embedding = Embedding(input_dim=num_words,input_length=maxlen,output_dim=embedding_dim,trainable=True)(inputs)
+    embedding = PositionEmbedding()(embedding)
+    attention = Attention(multiheads=multiheads,head_dim=head_dim,mask_right=False)([embedding,embedding,embedding])
+    
+    dim = K.int_shape(attention)[-1]
+    
+    gate = Dense(units=dim)(attention)
+    gate = Activation("sigmoid")(gate)
+    
+    negated_gate = Lambda(
+        lambda x: 1.0 - x,
+        output_shape=(dim,))(gate)
+    
+    transformed = Dense(units=dim)(attention)
+    transformed = Activation('tanh')(transformed)
+    transformed_gated = Multiply()([gate, transformed])
+    identity_gated = Multiply()([negated_gate, attention])
+    value = Add()([transformed_gated, identity_gated])
+    
+    attention_layer_norm = LayerNormalization()(value)
+    dropout = Dropout(dropout_rate)(attention_layer_norm)
+    flatten = Flatten()(dropout)
+    dense = Dense(dense_units,activation='relu')(flatten)
+    dense_layer_norm = LayerNormalization()(dense)
+    outputs = Dense(output_categories,activation='softmax')(dense_layer_norm)
+    model = Model(inputs=inputs,outputs=outputs)
+    
+    model.summary()
+    model.compile(optimizer=keras.optimizers.Adam(lr=0.001,beta_1=0.9,beta_2=0.999,epsilon=1e-8),
+              loss='categorical_crossentropy',
+              metrics=['acc'])
+    #二、模型训练及指标返回
+    history = model.fit(train_data,train_label,batch_size=batch_size,validation_data=(val_data,val_label),callbacks=callbacks,epochs=epochs,verbose=verbose)
+    train_acc = history.history['acc']
+    val_acc = history.history['val_acc']
+    test_loss,test_acc = model.evaluate(test_data,test_label)
+    return model,train_acc,val_acc,test_acc
+
 def BiGRU(train,test,val,output_categories,num_words,maxlen,embedding_dim,callbacks,
           gru_units=256,dropout=0.2,recurrent_dropout=0.2,
           batch_size=512,epochs=10,verbose=1):
